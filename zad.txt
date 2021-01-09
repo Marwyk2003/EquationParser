@@ -1,0 +1,6 @@
+Z miast A i B odległych o d=300km wyruszają jednocześnie dwa pociągi z prędkościami v_a=[45;55]m/s oraz v_b=65.1m/s.
+W jakiej odległości x=?km od miasta A spotkają się te pociągi? Po jakim czasie t=?s się to stanie? z=?km
+---
+t=300/(v_a+(v_b))
+x=t*v_a
+z=t*x^(1/2+1)
