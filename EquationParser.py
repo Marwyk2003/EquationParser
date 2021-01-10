@@ -1,10 +1,28 @@
+import sys 
 import re
 import random
 from datetime import datetime
 from sys import argv
 
+numberR = '[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?'
+variableR = '(?<![0-9])[a-zA-Z_][a-zA-Z_0-9]*'
+
 class FormatError(Exception):
-    pass
+    def __init__(self, eq, description):
+        print(f"FORMAT ERROR {eq}: {description}")
+        sys.exit()
+class ConvertionError(Exception):
+    def __init__(self, eq, description):
+        print(f"CONVERTION ERROR {eq}: {description}")
+        sys.exit()
+class CalculationError(Exception):
+    def __init__(self, eq, description):
+        print(f"CALCULATION ERROR {eq}: {description}")
+        sys.exit()
+class VariableError(Exception):
+    def __init__(self, var, description):
+        print(f"VARIABLE ERROR {var}: {description}")
+        sys.exit()
 
 class Equation:
     def __init__(self):
@@ -14,7 +32,7 @@ class Equation:
 
     # returns the type of a string
     def getType(self, c):
-        if re.fullmatch('[0-9.]+', c):
+        if re.fullmatch(numberR, c):
             # number (including decimal point)
             return 1
         elif c in '+-*/^':
@@ -45,154 +63,146 @@ class Equation:
     def extractEquation(self, eq):
         tab = []
         # pattern: operations or number or variable
-        r = re.compile('[\-\+\*\/\(\)\^]|[0-9.]+|[a-zA-Z_][a-zA-Z_0-9]*')
-        for x in r.findall(eq):
-            tab.append((x, self.getType(x)))
+        r = re.compile(f'[\+\-\*\/\^\(\)]|{variableR}|{numberR}')
+        for m in r.finditer(eq): 
+            tab.append((m.group(0), self.getType(m.group(0))))
         return tab
 
     # converts regular equation to an ONP list
     def convertToONP(self, eq):
-        try:
-            stack = []
-            ONPeq = []
-            negate = []
-            beginning = True
-            step = 0
-
-            # replace variables with responding values
-            r = re.compile('[a-zA-Z_][a-zA-Z_0-9]*')
-            while m := r.search(eq):
-                name = eq[m.start(): m.end()]
-                s = m.start()
-                e = m.end()
-                try:
-                    eq = eq[:s]+self.variables[name]+eq[e:]
-                except KeyError:
-                    print(f"UNKNOWN VARIABLE: {name}")
-                    return
-
-            # parse equation to a formated list
-            extEq = self.extractEquation(eq)
-            for ext, t in extEq:
-                if t == 0:
-                    # ignore if empty/unwanted haracter
-                    continue
-                elif t == -2:
-                    # if it it is a brace
-                    if ext == '(':
-                        # beginning of an inner equation
-                        stack.append('(')
-                        beginning = True
-                        step += 1
-                    elif ext == ')':
-                        # end of an inner equation
-                        while len(stack) > 0 and stack[-1] != '(':
-                            ONPeq.append(stack.pop())
-                        if stack[-1] == '(':
-                            stack.pop()
-                        else:
-                            print(f"MISSING BEGINNING OF A BRACE: {extEq}")
-
-                        # fix the problem with negative numbers by replacing -x with 0 x -
-                        step -= 1
-                        beginning = False
-                        if step in negate:
-                            ONPeq.append('-')
-                            negate.remove(step)
-                elif t == -1:
-                    # if it is an operation
-                    if beginning:
-                        # fix the problem with negative numbers
-                        # if this is the beginning of an equation (or equation in braces)
-                        # there is nothing to substract from
-                        # replacing -x -> 0 x -
-                        if ext == '-':
-                            ONPeq.append('0')
-                            negate.append(step)
-                        elif ext == '+':
-                            # +x is possible and equivalent to x
-                            pass
-                        else:
-                            print(
-                                f"UNEXPECTED OPERATION IN THE BEGINNING OF AN EQUATION: {extEq}")
-                    else:
-                        # if this is not the beginning
-                        # handle adding an operation
-                        p = self.getPrirority(ext)
-                        while len(stack) > 0:
-                            # fix the priority of previous operation
-                            px = self.getPrirority(stack[-1])
-                            if p >= px:
-                                break
-                            ONPeq.append(stack.pop())
-                        stack.append(ext)
+        stack = []
+        ONPeq = []
+        negate = []
+        beginning = True
+        step = 0
+        # replace variables with responding values
+        r = re.compile(variableR)
+        while m := r.search(eq):
+            name = eq[m.start(): m.end()]
+            s = m.start()
+            e = m.end()
+            try:
+                if float(self.variables[name]) < 0:
+                    # -var -> (-var)
+                    eq = eq[:s]+'('+self.variables[name]+')'+eq[e:]
                 else:
-                    # else it is a number
-                    # add the number to ONP equation
-                    # fix negative numbers if an exists in current step
-                    ONPeq.append(ext)
+                    eq = eq[:s]+self.variables[name]+eq[e:]
+            except KeyError:
+                raise VariableError(name, 'VAR IN EQUATION DOESNT EXIST')
+
+        # parse equation to a formated list
+        extEq = self.extractEquation(eq)    
+
+        for ext, t in extEq:
+            if t == 0:
+                # ignore if empty/unwanted haracter
+                continue
+            elif t == -2:
+                # if it it is a brace
+                if ext == '(':
+                    # beginning of an inner equation
+                    stack.append('(')
+                    beginning = True
+                    step += 1
+                elif ext == ')':
+                    # end of an inner equation
+                    while len(stack) > 0 and stack[-1] != '(':
+                        ONPeq.append(stack.pop())
+                    if stack[-1] == '(':
+                        stack.pop()
+                    else:
+                        raise FormatError(eq, 'BRACES')
+                    step -= 1
                     beginning = False
-                    if step in negate:
-                        ONPeq.append('-')
-                        negate.remove(step)
-            while len(stack) > 0:
-                # add everything what's left
-                ONPeq.append(stack.pop())
-            return ONPeq
-        except:
-            print(f"ERROR WHILE CONVERTING TO ONP: {eq}")
-            return
+            elif t == -1:
+                # if it is an operation
+                if beginning:
+                    # fix the problem with negative numbers
+                    # if this is the beginning of an equation (or equation in braces)
+                    # there is nothing to substract from
+                    # replacing -x -> 0 x -
+                    if ext == '-':
+                        ONPeq.append('0')
+                        negate.append(step)
+                    elif ext == '+':
+                        # +x is possible and equivalent to x
+                        pass
+                    else:
+                        raise FormatError(ext, 'UNEXPECTED OPERATION')
+                else:
+                    # if this is not the beginning
+                    # handle adding an operation
+                    p = self.getPrirority(ext)
+                    while len(stack) > 0:
+                        # fix the priority of previous operation
+                        px = self.getPrirority(stack[-1])
+                        if p >= px:
+                            break
+                        ONPeq.append(stack.pop())
+                    stack.append(ext)
+                    beginning=True
+            else:
+                # else it is a number
+                ONPeq.append(ext)
+                beginning = False
+            # fix the problem with negative numbers by replacing -x with 0 x -
+            # add the number to ONP equation
+            # fix negative numbers if an exists in current step
+            if (t == 1 or ext == '(') and step in negate:
+                ONPeq.append('-')
+                negate.remove(step)
+        while len(stack) > 0:
+            # add everything what's left
+            ONPeq.append(stack.pop())
+        return ONPeq
 
     # function calculates the result given ONP equation
     def calculateONP(self, eq):
-        try:
-            stack = []
-            for c in eq:
-                t = self.getType(c)
-                if t == 1:
-                    # if it is a number
-                    stack.append(c)
-                elif t == -1:
-                    # if it is an operation
-                    if len(stack) < 2:
-                        print(f"NOT ENOUGH ELEMENTS IN STACK: {eq}")
-                        return
-                    v2 = float(stack.pop())
-                    v1 = float(stack.pop())
-                    if c == '+':
-                        v1 += v2
-                    elif c == '-':
-                        v1 -= v2
-                    elif c == '*':
-                        v1 *= v2
-                    elif c == '/':
-                        v1 /= v2
-                    elif c == '^':
-                        v1 **= v2
-                    stack.append(v1)
-            return stack[0]
-        except:
-            print(f"ERROR WHILE CALCULATING ONP: {eq}")
-            return
+        stack = []
+        for c in eq:
+            t = self.getType(c)
+            if t == 1:
+                # if it is a number
+                stack.append(c)
+            elif t == -1:
+                # if it is an operation
+                if len(stack) < 2:
+                    raise CalculationError(eq, 'STACK IS EMPTY')
+                v2 = float(stack.pop())
+                v1 = float(stack.pop())
+                if c == '+':
+                    v1 += v2
+                elif c == '-':
+                    v1 -= v2
+                elif c == '*':
+                    v1 *= v2
+                elif c == '/':
+                    v1 /= v2
+                elif c == '^':
+                    v1 **= v2
+                    if isinstance(v1, complex):
+                        raise CalculationError(eq, 'COMPLEX SOLUTION')
+                stack.append(v1)
+        return stack[0]
 
     # Fetches data from problem's content
     # all data are saved in self.variables or self.unknowns
     def FetchFromContent(self, text):
         # fetch given variables
-        r = re.compile('([a-zA-Z_][a-zA-Z_0-9]*)=([0-9.]+)')
-        for m in r.findall(text):
-            self.variables[m[0]] = m[1]
+        r = re.compile(f'({variableR})=({numberR})')
+        for m in r.finditer(text):
+            self.variables[m.group(1)] = m.group(2)
 
         # fetch given range variables
-        r = re.compile('([a-zA-Z_][a-zA-Z_0-9]*)=\[([0-9.]+);([0-9.]+)\]')
-        for m in r.findall(text):
-            self.variables[m[0]] = str(
-                round(random.uniform(float(m[1]), float(m[2])), 2))
+        r = re.compile(f'({variableR})=\[({numberR});({numberR})\]')
+        for m in r.finditer(text):
+            self.variables[m.group(1)] = str(
+                round(random.uniform(float(m.group(2)), float(m.group(3))), 2))
 
         # fetch asked unknowns
-        r = re.compile('([a-zA-Z_][a-zA-Z_0-9]*)=\?([a-zA-Z_0-9\/*^\(\)]+)')
-        for m in r.findall(text):
-            self.unknowns[m[0]] = m[1]
+        r = re.compile(f'({variableR})=\?([a-zA-Z_0-9\/*^\(\)]+)')
+        for m in r.finditer(text):
+            self.unknowns[m.group(1)] = m.group(2)
 
     # Executes single line of EquEx format
     def InterpretLine(self, text, lineNum):
@@ -201,14 +211,12 @@ class Equation:
             return
 
         # get everything matching pattern
-        r = re.compile(
-            '([a-zA-Z_][a-zA-Z_0-9]*)=([\+\-\*\/\^0-9.a-zA-Z_\(\)]+)')
+        r = re.compile(f'({variableR})=(([\+\-]?[\^a-zA-Z_0-9.\(\)]+[\*\/\^]?)+)')
         m = r.match(text)
 
         # return if match is invaid
         if not r.fullmatch(text):
-            print(f"INVALID FORMAT AT LINE {lineNum}: {text}")
-            return
+            raise FormatError(text, 'LINE DOESNT MATCH PATTERN')
 
         # if no mistakes convert/calculate/update dictionaries
         ONPeq = self.convertToONP(m.group(2))
@@ -228,12 +236,11 @@ class Equation:
                 # second phaze: execute the rest of code
                 e.InterpretLine(x, i)
         for x in self.unknowns:
-            # print everything we were looking for
             try:
                 print(
-                    [f'{x} -> {round(float(self.variables[x]), 2)} {self.unknowns[x]}'])
+                    f'{x} -> {float(self.variables[x])} {self.unknowns[x]}')
             except:
-                print(f"UNKNOWN VARIABLE: {x}")
+                raise VariableError(x, 'UNKNOWN VAR DOESNT EXIST')
 
 
 # python EquationParser.py < zad.txt
