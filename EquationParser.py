@@ -1,11 +1,14 @@
-import sys 
+from math import nan
+import sys
+from sys import argv
 import re
 import random
 from datetime import datetime
-from sys import argv
+import numpy as np
 
 numberR = '[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?'
 variableR = '(?<![0-9])[a-zA-Z_][a-zA-Z_0-9]*'
+functionsR = '(?:sin|cos|tan)h?r?|abs|exp|ln|log2|log10'
 
 class FormatError(Exception):
     def __init__(self, eq, description):
@@ -40,6 +43,8 @@ class Equation:
             return -1
         elif c in '()':
             return -2
+        elif re.fullmatch(functionsR, c):
+            return -3
         else:
             # empty/unwanted character
             return 0
@@ -63,24 +68,28 @@ class Equation:
     def extractEquation(self, eq):
         tab = []
         # pattern: operations or number or variable
-        r = re.compile(f'[\+\-\*\/\^\(\)]|{variableR}|{numberR}')
+        r = re.compile(f'{functionsR}|[\+\-\*\/\^\(\)]|{variableR}|{numberR}')
         for m in r.finditer(eq): 
             tab.append((m.group(0), self.getType(m.group(0))))
         return tab
 
     # converts regular equation to an ONP list
     def convertToONP(self, eq):
-        stack = []
-        ONPeq = []
-        negate = []
+        stack = [] # operation stack
+        ONPeq = [] # ONP equation function return
+        funcStack = [] # function stack 
         beginning = True
         step = 0
         # replace variables with responding values
         r = re.compile(variableR)
-        while m := r.search(eq):
-            name = eq[m.start(): m.end()]
-            s = m.start()
-            e = m.end()
+        i = 0 # keep index where last function ended, s we dont have inf loop
+        while m := r.search(eq[i:]):             
+            s = m.start()+i
+            e = m.end()+i
+            name = eq[s:e]
+            if re.fullmatch(functionsR, name):
+                i=e # update index to end of new function
+                continue
             try:
                 if float(self.variables[name]) < 0:
                     # -var -> (-var)
@@ -91,7 +100,7 @@ class Equation:
                 raise VariableError(name, 'VAR IN EQUATION DOESNT EXIST')
 
         # parse equation to a formated list
-        extEq = self.extractEquation(eq)    
+        extEq = self.extractEquation(eq)
 
         for ext, t in extEq:
             if t == 0:
@@ -123,7 +132,7 @@ class Equation:
                     # replacing -x -> 0 x -
                     if ext == '-':
                         ONPeq.append('0')
-                        negate.append(step)
+                        funcStack.append((step, '-'))
                     elif ext == '+':
                         # +x is possible and equivalent to x
                         pass
@@ -141,6 +150,8 @@ class Equation:
                         ONPeq.append(stack.pop())
                     stack.append(ext)
                     beginning=True
+            elif t==-3:
+                funcStack.append((step, ext))
             else:
                 # else it is a number
                 ONPeq.append(ext)
@@ -148,9 +159,10 @@ class Equation:
             # fix the problem with negative numbers by replacing -x with 0 x -
             # add the number to ONP equation
             # fix negative numbers if an exists in current step
-            if (t == 1 or ext == '(') and step in negate:
-                ONPeq.append('-')
-                negate.remove(step)
+            if (t == 1 or ext == ')'):
+                for s, f in funcStack:
+                    if s == step:
+                        ONPeq.append(f)
         while len(stack) > 0:
             # add everything what's left
             ONPeq.append(stack.pop())
@@ -179,10 +191,45 @@ class Equation:
                 elif c == '/':
                     v1 /= v2
                 elif c == '^':
-                    v1 **= v2
+                    v1 = np.pow(v1,v2)
                     if isinstance(v1, complex):
                         raise CalculationError(eq, 'COMPLEX SOLUTION')
                 stack.append(v1)
+            elif t == -3:
+                if len(stack) < 1:
+                    raise CalculationError(eq, 'STACK IS EMPTY')
+                v = float(stack.pop()) 
+                ang = v if c[-1]=='r' else np.radians(v)
+                if c == 'abs':
+                    v = np.abs(v)
+                if c == 'exp':
+                    v = np.exp(v)
+                elif c == 'ln':
+                    v = np.log(v)
+                elif c == 'log2':
+                    v = np.log2(v)
+                elif c == 'log10':
+                    c= np.log10(v)
+                elif c == 'sin' or 'sinr':
+                    v = np.sin(ang)
+                elif c == 'cos' or 'cosr':
+                    v = np.cos(ang)
+                elif c == 'tg' or 'tgr':
+                    v = np.tan(ang)
+                elif c == 'ctg' or 'ctgr':
+                    v = np.cot(ang)
+                elif c == 'sinh' or 'sinhr':
+                    v = np.sinh(ang)
+                elif c == 'cosh' or 'coshr':
+                    v = np.cosh(ang)
+                elif c == 'tgh' or 'tghr':
+                    v = np.tanh(ang)
+                elif c == 'ctgh' or 'ctghr':
+                    v = np.coth(ang)
+                if np.isnan(v):
+                    raise CalculationError(c, 'UNEXPECTED NAN VALUE')
+                stack.append(v)
+
         return stack[0]
 
     # Fetches data from problem's content
@@ -200,18 +247,18 @@ class Equation:
                 round(random.uniform(float(m.group(2)), float(m.group(3))), 2))
 
         # fetch asked unknowns
-        r = re.compile(f'({variableR})=\?([a-zA-Z_0-9\/*^\(\)]+)')
+        r = re.compile(f'({variableR})=\?([a-zA-Z_0-9\/*^\(\)]+)?')
         for m in r.finditer(text):
             self.unknowns[m.group(1)] = m.group(2)
 
     # Executes single line of EquEx format
-    def InterpretLine(self, text, lineNum):
+    def InterpretLine(self, text):
         if text == '':
             # ignore if the line is empty
             return
 
         # get everything matching pattern
-        r = re.compile(f'({variableR})=(([\+\-]?[\^a-zA-Z_0-9.\(\)]+[\*\/\^]?)+)')
+        r = re.compile(f'({variableR})=((?:[\+\-\]|{functionsR}?[\^a-zA-Z_0-9.\(\)]+[\*\/\^]?)+)')
         m = r.match(text)
 
         # return if match is invaid
@@ -226,7 +273,7 @@ class Equation:
     # Executes the whole code
     def Execute(self, text):
         phaze = 0
-        for i, x in enumerate(text.split('\n')):
+        for x in text.split('\n'):
             if x == '---':  # indicator of a new type of code
                 phaze += 1
             elif phaze == 0:
@@ -234,11 +281,11 @@ class Equation:
                 e.FetchFromContent(x)
             elif phaze == 1:
                 # second phaze: execute the rest of code
-                e.InterpretLine(x, i)
+                e.InterpretLine(x)
         for x in self.unknowns:
             try:
                 print(
-                    f'{x} -> {float(self.variables[x])} {self.unknowns[x]}')
+                    f"{x} -> {float(self.variables[x])} {self.unknowns[x] if self.unknowns[x] != None else ''}")
             except:
                 raise VariableError(x, 'UNKNOWN VAR DOESNT EXIST')
 
